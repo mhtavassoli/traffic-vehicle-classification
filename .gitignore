@@ -1,0 +1,22 @@
+# Data & checkpoints
+dataset/
+artifacts/
+*.pt
+*.pth
+*.ckpt
+wandb/
+runs/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.ipynb_checkpoints/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Secrets
+.env
+*.key
