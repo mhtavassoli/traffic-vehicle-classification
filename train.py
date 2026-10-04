@@ -1,14 +1,14 @@
 """Single training loop shared by every experiment (CE / BCE / schedulers)."""
 import time, torch, torch.nn as nn, torch.nn.functional as F
 from torch.utils.data import DataLoader
-from config import DEVICE  # set as "cuda"/"cpu" in config
+from config import NUM_CLASSES, DEVICE  # set as "cuda"/"cpu" in config
 
 def make_loss(loss_type):
     """Return (criterion, target_adapter)."""
     if loss_type == "ce":
         return nn.CrossEntropyLoss(), lambda t: t              # int labels
     elif loss_type == "bce":
-        return nn.BCEWithLogitsLoss(), lambda t: F.one_hot(t, 8).float()
+        return nn.BCEWithLogitsLoss(), lambda t: F.one_hot(t, NUM_CLASSES).float()
     raise ValueError(loss_type)
 
 def train_one_epoch(model, loader, optimizer, criterion, target_adapter, device):
@@ -51,6 +51,7 @@ def fit(model, train_loader, val_loader, *, loss_type="ce", epochs=20,
     Returns history dict with per-epoch train/val loss, accuracy, and LR.
     Saves the best checkpoint by validation accuracy (never test).
     """
+    model=model.to(device) # For not "RuntimeError: Expected all tensors to be on the same device"
     criterion, adapter = make_loss(loss_type)
     opt = torch.optim.AdamW(param_groups or model.parameters(), lr=lr, weight_decay=wd)
     history = {"train_loss": [], "val_loss": [], "val_acc": [], "lr": []}

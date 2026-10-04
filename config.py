@@ -2,6 +2,7 @@
 import os
 from dataclasses import dataclass, field
 from typing import List, Tuple
+import torch
 
 SEED = 42
 DATA_ROOT = "dataset"
@@ -26,6 +27,8 @@ CONFIDENCE_THRESHOLD = 0.70
 # ImageNet statistics — required whenever we use pretrained ResNet18
 IMAGENET_MEAN = (0.485, 0.456, 0.406)
 IMAGENET_STD  = (0.229, 0.224, 0.225)
+
+DEVICE = "cuda" if torch.cuda.is_available() else "cpu" 
 
 ARTIFACTS = "artifacts"
 os.makedirs(ARTIFACTS, exist_ok=True)
