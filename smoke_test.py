@@ -10,6 +10,7 @@ from train import fit
 from torch.utils.data import DataLoader
 
 def main():
+    torch.cuda.empty_cache() # Clearing the cache
     print("=" * 60)
     print("SMOKE TEST — Traffic Vehicle Classification")
     print("=" * 60)
@@ -50,8 +51,10 @@ def main():
 
     ds_tr = IndexedImageDataset(tr_items, class_to_idx, train_transform(True))
     ds_va = IndexedImageDataset(va_items, class_to_idx, eval_transform())
-    tr_loader = DataLoader(ds_tr, batch_size=16, shuffle=True, num_workers=0)
-    va_loader = DataLoader(ds_va, batch_size=16, shuffle=False, num_workers=0)
+    tr_loader = DataLoader(ds_tr, batch_size=32, shuffle=True, num_workers=4, pin_memory=True)
+    # tr_loader = DataLoader(ds_tr, batch_size=1, shuffle=True, num_workers=0)
+    va_loader = DataLoader(ds_va, batch_size=32, shuffle=False, num_workers=4, pin_memory=True)
+    # va_loader = DataLoader(ds_va, batch_size=1, shuffle=False, num_workers=0)
     print(f"  Train: {len(ds_tr)}  Val: {len(ds_va)}")
 
     # 4) Build model
@@ -63,9 +66,15 @@ def main():
 
     # 5) Train 2 epochs
     print(f"\n[5/6] Training for 2 epochs (smoke)...")
-    hist = fit(model, tr_loader, va_loader, epochs=2, lr=1e-3)
-    print(f"  Best val acc: {hist['best_val_acc']:.4f}")
-
+    try:
+        hist = fit(model, tr_loader, va_loader, epochs=2, lr=1e-3)
+        print(f"  Best val acc: {hist['best_val_acc']:.4f}")
+    except Exception as e:
+        print(f"\n[ERROR] Crash during training: {e}")
+        import traceback
+        traceback.print_exc()
+        sys.exit(1)
+        
     # 6) Predict on one image
     print(f"\n[6/6] Testing predict...")
     from predict import predict

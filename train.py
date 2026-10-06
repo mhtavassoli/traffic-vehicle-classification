@@ -51,6 +51,7 @@ def fit(model, train_loader, val_loader, *, loss_type="ce", epochs=20,
     Returns history dict with per-epoch train/val loss, accuracy, and LR.
     Saves the best checkpoint by validation accuracy (never test).
     """
+    torch.cuda.empty_cache() # Clearing the cache
     model=model.to(device) # For not "RuntimeError: Expected all tensors to be on the same device"
     criterion, adapter = make_loss(loss_type)
     opt = torch.optim.AdamW(param_groups or model.parameters(), lr=lr, weight_decay=wd)
