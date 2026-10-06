@@ -16,12 +16,22 @@ from config import TRAIN_DIR, TEST_DIR, UNCLEAN_DIR, CLASSES
 def list_split(split_dir):
     """Return [(path, class_name)] for every image file under split_dir/class/."""
     items = []
+    if not os.path.isdir(split_dir):
+        return items
     for cls in sorted(os.listdir(split_dir)):
         cls_dir = os.path.join(split_dir, cls)
         if not os.path.isdir(cls_dir):
             continue
         for fname in os.listdir(cls_dir):
             items.append((os.path.join(cls_dir, fname), cls))
+    return items
+
+def load_all_train_items():
+    """Merge V1 and V2 train splits when USE_DATASET_V2 is True."""
+    from config import TRAIN_DIR, TRAIN_DIR_V2, USE_DATASET_V2
+    items = list_split(TRAIN_DIR)
+    if USE_DATASET_V2:
+        items += list_split(TRAIN_DIR_V2)
     return items
 
 def audit_readability(items):
