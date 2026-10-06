@@ -28,7 +28,10 @@ USE_DATASET_V2 = os.getenv("USE_DATASET_V2", "false").lower() == "true"
 
 # =========================================================================
 SEED = 42
-DATA_ROOT = "dataset"
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))  # The config.py folder itself
+PROJECT_ROOT = os.path.dirname(BASE_DIR) # We move up one level to reach HW12-0-Project-Vehicle.
+# DATA_ROOT = "dataset"
+DATA_ROOT = os.path.join(PROJECT_ROOT, "dataset")
 TRAIN_DIR = os.path.join(DATA_ROOT, "train")
 TEST_DIR  = os.path.join(DATA_ROOT, "test")
 UNCLEAN_DIR = os.path.join(DATA_ROOT, "unclean")
