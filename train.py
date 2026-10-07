@@ -46,15 +46,23 @@ def evaluate(model, loader, criterion, target_adapter, device):
 
 def fit(model, train_loader, val_loader, *, loss_type="ce", epochs=20,
         lr=1e-3, wd=0.0, scheduler=None, device=DEVICE,
-        param_groups=None, log_every=1):
+        param_groups=None, log_every=1, optimizer=None):
     """
     Returns history dict with per-epoch train/val loss, accuracy, and LR.
     Saves the best checkpoint by validation accuracy (never test).
+    optimizer: optional — pass pre-built optimizer (needed when using a scheduler).
     """
     torch.cuda.empty_cache() # Clearing the cache
     model=model.to(device) # For not "RuntimeError: Expected all tensors to be on the same device"
     criterion, adapter = make_loss(loss_type)
-    opt = torch.optim.AdamW(param_groups or model.parameters(), lr=lr, weight_decay=wd)
+    
+    # FIX: use the pre-built optimizer if given, else build one
+    # opt = torch.optim.AdamW(param_groups or model.parameters(), lr=lr, weight_decay=wd)
+    if optimizer is None:
+        opt = torch.optim.AdamW(param_groups or model.parameters(), lr=lr, weight_decay=wd)
+    else:
+        opt = optimizer
+        
     history = {"train_loss": [], "val_loss": [], "val_acc": [], "lr": []}
     best_acc, best_state = 0.0, None
 

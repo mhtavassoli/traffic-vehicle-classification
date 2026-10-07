@@ -63,18 +63,17 @@ def run_experiment(name, *, use_aug=True, dropout=0.3, pool_type="max",
         model = build_resnet18(resnet_mode, NUM_CLASSES).to(DEVICE)
         groups = resnet_param_groups(model, lr_head=LR, lr_backbone=LR / 10, wd=wd)
 
+    # Build optimizer ONCE, share between scheduler and fit
+    opt = torch.optim.AdamW(model.parameters(), lr=LR, weight_decay=wd)
+
     sched = None
     if scheduler == "step":
-        sched = torch.optim.lr_scheduler.StepLR(
-            torch.optim.AdamW(model.parameters(), lr=LR, weight_decay=wd),
-            step_size=5, gamma=0.5)
+        sched = torch.optim.lr_scheduler.StepLR(opt, step_size=5, gamma=0.5)
     elif scheduler == "plateau":
-        sched = torch.optim.lr_scheduler.ReduceLROnPlateau(
-            torch.optim.AdamW(model.parameters(), lr=LR, weight_decay=wd),
-            mode="min", factor=0.5, patience=3)
+        sched = torch.optim.lr_scheduler.ReduceLROnPlateau(opt, mode="min", factor=0.5, patience=3)
 
     hist = fit(model, tr_loader, va_loader, loss_type=loss_type, epochs=epochs,
-               lr=LR, wd=wd, scheduler=sched, param_groups=groups)
+               lr=LR, wd=wd, scheduler=sched, param_groups=groups, optimizer=opt)
 
     # Evaluate on val only (test frozen until final choice)
     _, _, logits, labels = evaluate(
