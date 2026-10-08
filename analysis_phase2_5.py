@@ -1,5 +1,5 @@
 """analysis_phase2_5.py — Extended threshold + MC Dropout + Cross-Model."""
-import os, json, numpy as np, torch, torch.nn.functional as F
+import os, json, numpy as np, torch,torch.nn as nn, torch.nn.functional as F
 from torch.utils.data import DataLoader
 from config import (CLASSES, NUM_CLASSES, DEVICE, ARTIFACTS, BATCH_SIZE,
                     TRAIN_DIR, VAL_FRACTION, SEED)
@@ -31,10 +31,17 @@ def optimize_double_threshold_v2(logits, labels, review_cost=0.1,
                 best_score, best = score, (low, high)
     return best, best_score, grid_results
 
+def enable_dropout_only(model):
+    """Keep BatchNorm in eval, enable only Dropout layers."""
+    for m in model.modules():
+        if isinstance(m, nn.Dropout):
+            m.train()
 
 def mc_dropout_uncertainty(model, loader, n_samples=30, device=DEVICE):
     """MC Dropout: variance across stochastic forward passes."""
-    model.train()  # Dropout ON
+    # model.train()  # Dropout ON
+    model.eval()  # Dropout ON
+    enable_dropout_only(model) 
     results = []
     with torch.no_grad():
         for x, y in loader:
@@ -53,7 +60,7 @@ def mc_dropout_uncertainty(model, loader, n_samples=30, device=DEVICE):
                 "correct": correct.cpu(), "pred": pred.cpu(), "true": y.cpu(),
                 "std_per_class": std.cpu(),
             })
-    model.eval()
+    model.eval()      
     return results
 
 
