@@ -14,13 +14,41 @@ from config import TRAIN_DIR, TEST_DIR
 # 1) Load a trained checkpoint
 # ============================================================
 def load_checkpoint(name, arch="cnn"):
+    """
+    Load a checkpoint, handling legacy key names.
+    - Old ResNet: fc.weight, fc.bias  (nn.Linear)
+    - New ResNet: fc.1.weight, fc.1.bias  (nn.Sequential(Dropout, Linear))
+    """
     ckpt_path = os.path.join(ARTIFACTS, f"{name}.pt")
+    if not os.path.exists(ckpt_path):
+        raise FileNotFoundError(f"No checkpoint at {ckpt_path}")
+    
     ckpt = torch.load(ckpt_path, map_location=DEVICE, weights_only=False)
+    
     if arch == "cnn":
         model = TrafficCNN(NUM_CLASSES).to(DEVICE)
     else:
         model = build_resnet18("fine_tune", NUM_CLASSES).to(DEVICE)
-    model.load_state_dict(ckpt["state_dict"])
+    
+    state = ckpt["state_dict"]
+
+    # --- Legacy key mapping for ResNet checkpoints ---
+    new_state = {}
+    for k, v in state.items():
+        if k in ("fc.weight", "fc.bias"):
+            # Old key → new key (Dropout is fc.0 with no params)
+            param_name = k.split(".")[1]   # "weight" or "bias"
+            new_state[f"fc.1.{param_name}"] = v
+        else:
+            new_state[k] = v
+            
+    missing, unexpected = model.load_state_dict(new_state, strict=False)
+    # Only Dropout has no params → missing should be empty; unexpected maybe empty
+    if missing:
+        print(f"  [warn] {name}: missing keys after remap: {missing}")
+    if unexpected:
+        print(f"  [warn] {name}: unexpected keys after remap: {unexpected}")
+ 
     model.eval()
     return model, ckpt
 
