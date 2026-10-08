@@ -54,13 +54,8 @@ def mc_dropout_analysis(model, loader, n_samples=50, device=DEVICE):
 # ============================================================
 def save_cross_model_errors(models_dict, dataset, val_loader,
                             save_path=os.path.join(ARTIFACTS, "cross_model_errors.png")):
-    """
-    Find images missed by 2+ models, and save their visual gallery.
-    """
-    from collections import defaultdict
-    per_image = defaultdict(list)
+    """Find images missed by 2+ models, save their visual gallery."""
     all_preds = {}
-
     for name, model in models_dict.items():
         model.eval()
         preds_all = []
@@ -70,10 +65,9 @@ def save_cross_model_errors(models_dict, dataset, val_loader,
                 preds_all.append(model(x).argmax(1).cpu())
         all_preds[name] = torch.cat(preds_all)
 
-    # Collect labels
     labels = torch.cat([y for _, y in val_loader])
 
-    # Find multi-error images
+    # Find images missed by 2+ models
     multi_error_indices = []
     for i in range(len(labels)):
         miss_count = sum(
@@ -84,36 +78,41 @@ def save_cross_model_errors(models_dict, dataset, val_loader,
             multi_error_indices.append(i)
 
     print(f"  Found {len(multi_error_indices)} images missed by 2+ models")
-
-    # Visualize
     n = min(len(multi_error_indices), 12)
     if n == 0:
-        print("  No cross-model errors to show.")
         return multi_error_indices
 
     fig, axes = plt.subplots(3, 4, figsize=(16, 12))
     axes = axes.flatten()
+
     for idx, img_idx in enumerate(multi_error_indices[:n]):
-        img, true_label = dataset[img_idx]
+        img, true_label = dataset[img_idx]      # ← true_label is int
         ax = axes[idx]
+
         # Denormalize
         img_np = img.permute(1, 2, 0).numpy()
         img_np = img_np * np.array([0.229, 0.224, 0.225]) + np.array([0.485, 0.456, 0.406])
         ax.imshow(np.clip(img_np, 0, 1))
+
+        # FIXED: use true_label directly (it's an int)
         preds_str = " | ".join(
             f"{name[:6]}:{CLASSES[all_preds[name][img_idx].item()][:4]}"
             for name in models_dict
         )
-        ax.set_title(f"True: {CLASSES[true_label.item()]}\n{preds_str}",
-                     fontsize=8, color="red")
+        ax.set_title(
+            f"True: {CLASSES[true_label]}\n{preds_str}",   # ← no .item()
+            fontsize=8, color="red"
+        )
         ax.axis("off")
+
+    # Hide unused axes
     for idx in range(n, len(axes)):
         axes[idx].axis("off")
+
     fig.savefig(save_path, bbox_inches="tight")
     plt.close(fig)
     print(f"  Saved to {save_path}")
     return multi_error_indices
-
 
 # ============================================================
 # 3) OOD Analysis — FIXED: separate known from neysan
@@ -147,11 +146,17 @@ def ood_analysis(model, unclean_items, class_to_idx, threshold=0.70):
                 results["known"]["correct"] += (pred == y).sum().item()
                 results["known"]["low_conf"] += (conf < threshold).sum().item()
 
+    all_unclean_classes = set(c for _, c in unclean_items)
+    unknown_classes = all_unclean_classes - set(class_to_idx.keys())
+    print(f"  Unknown classes found: {unknown_classes}")
+
     # --- Unknown items (neysan) ---
+    # Create dummy_idx only if unknown_classes is non-empty
     if unknown_items:
         # We don't know the label, so use a dummy index 0 (won't be used)
         dummy_idx = {c: 0 for c in class_to_idx}
-        for cls in set(c for _, c in unknown_items):
+        # for cls in set(c for _, c in unknown_items):
+        for cls in unknown_classes:
             dummy_idx[cls] = 0
         ds = IndexedImageDataset(unknown_items, dummy_idx, eval_transform())
         loader = DataLoader(ds, batch_size=BATCH_SIZE, shuffle=False)
