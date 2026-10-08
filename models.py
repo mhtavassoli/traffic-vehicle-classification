@@ -22,15 +22,24 @@ class TrafficCNN(nn.Module):
     def forward(self, x):
         return self.head(self.features(x))
 
-def build_resnet18(mode="feature_extract", num_classes=NUM_CLASSES):
+def build_resnet18(mode="feature_extract", num_classes=NUM_CLASSES, dropout=0.3):
     """
     mode='feature_extract' -> freeze backbone, train head only.
     mode='fine_tune'       -> unfreeze layer4 + head; lower LR for pretrained params.
+    dropout                -> ADD Dropout before fc (crucial for MC Dropout!)
     """
     assert mode in {"feature_extract", "fine_tune"}
     net = models.resnet18(weights=models.ResNet18_Weights.IMAGENET1K_V1)
+    
     # Replace the classifier head for our 8 classes.
-    net.fc = nn.Linear(net.fc.in_features, num_classes)
+    # net.fc = nn.Linear(net.fc.in_features, num_classes)
+    
+    # Replace fc with Dropout + Linear (needed for MC Dropout!)
+    in_features = net.fc.in_features
+    net.fc = nn.Sequential(
+        nn.Dropout(p=dropout),
+        nn.Linear(in_features, num_classes),
+    )
 
     if mode == "feature_extract":
         for p in net.parameters(): p.requires_grad = False
