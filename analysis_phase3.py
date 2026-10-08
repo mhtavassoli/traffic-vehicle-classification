@@ -214,8 +214,7 @@ def fuzzy_route(conf, low=0.3, high=0.9):
 # ============================================================
 def main():
     print("=" * 70)
-    print("PHASE 3 (FIXED) : Fixed UQ + Cross-Model Gallery + OOD + Fuzzy
-")
+    print("PHASE 3 (FIXED) : Fixed UQ + Cross-Model Gallery + OOD + Fuzzy")
     print("=" * 70)
 
     # Build val set
