@@ -42,6 +42,7 @@ def fit_energy_threshold(model, val_loader, device=DEVICE, percentile=5):
 def fit_mahalanobis(model, train_loader, device=DEVICE):
     """
     Fit Gaussian per class on penultimate features.
+    All tensors stay on `device` for speed.
     Reference: Lee et al., NeurIPS 2018.
     """
     model.eval()
@@ -56,8 +57,8 @@ def fit_mahalanobis(model, train_loader, device=DEVICE):
     feats_per_class = {c: [] for c in range(NUM_CLASSES)}
     with torch.no_grad():
         for x, y in train_loader:
-            x = x.to(device)
-            feats = get_features(x).cpu()
+            x, y = x.to(device), y.to(device)
+            feats = get_features(x)          # ← stays on device
             for i in range(x.size(0)):
                 feats_per_class[y[i].item()].append(feats[i])
 
@@ -66,7 +67,7 @@ def fit_mahalanobis(model, train_loader, device=DEVICE):
     for c in range(NUM_CLASSES):
         f = torch.stack(feats_per_class[c])
         means.append(f.mean(0))
-    means = torch.stack(means)  # (C, D)
+    means = torch.stack(means)  # (C, D) on device
 
     # Shared covariance
     all_feats = []
@@ -75,14 +76,17 @@ def fit_mahalanobis(model, train_loader, device=DEVICE):
         all_feats.append(f - means[c])
     all_feats = torch.cat(all_feats)
     cov = (all_feats.T @ all_feats) / all_feats.size(0)
-    cov += torch.eye(cov.size(0)) * 1e-4  # regularization
+    cov += torch.eye(cov.size(0), device=device) * 1e-4  # regularization, device match
     precision = torch.linalg.inv(cov)
 
     return means, precision, get_features
 
 
 def mahalanobis_score(features, means, precision):
-    """Min Mahalanobis distance across class means."""
+    """Min Mahalanobis distance across class means. Auto-moves to features' device."""
+    means = means.to(features.device)
+    precision = precision.to(features.device)
+
     # features: (B, D), means: (C, D), precision: (D, D)
     diff = features.unsqueeze(1) - means.unsqueeze(0)  # (B, C, D)
     # (B, C, D) @ (D, D) -> (B, C, D)
@@ -186,15 +190,16 @@ def evaluate_ood(model, val_loader, unclean_items, class_to_idx,
         [0] * len(id_mahal) + [1] * len(ood_mahal),
         id_mahal.tolist() + ood_mahal.tolist()
     )
-
+    
+    # Move everything to the CPU before returning.
     return {
-        "auroc_softmax": auroc_conf,
-        "auroc_energy": auroc_energy,
-        "auroc_mahalanobis": auroc_mahal,
-        "id_energy_mean": id_energy.mean().item(),
-        "ood_energy_mean": ood_energy.mean().item(),
-        "id_mahal_mean": id_mahal.mean().item(),
-        "ood_mahal_mean": ood_mahal.mean().item(),
+        "auroc_softmax": float(auroc_conf),
+        "auroc_energy": float(auroc_energy),
+        "auroc_mahalanobis": float(auroc_mahal),
+        "id_energy_mean": float(id_energy.mean().item()),
+        "ood_energy_mean": float(ood_energy.mean().item()),
+        "id_mahal_mean": float(id_mahal.mean().item()),
+        "ood_mahal_mean": float(ood_mahal.mean().item()),
     }
 
 
