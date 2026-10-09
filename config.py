@@ -59,3 +59,26 @@ DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
 ARTIFACTS = "artifacts"
 os.makedirs(ARTIFACTS, exist_ok=True)
+
+# ============ TestingData (from mentor) ============
+# Located OUTSIDE the project directory
+TESTING_DATA_ROOT = os.path.abspath(
+    os.path.join(_HERE, "..", "TestingData")
+)
+
+# Auto-discover all test folders (test0, test1, ...)
+def discover_test_folders(root):
+    """Find all subdirectories containing class subfolders."""
+    if not os.path.isdir(root):
+        return []
+    folders = []
+    for name in sorted(os.listdir(root)):
+        full = os.path.join(root, name)
+        if os.path.isdir(full):
+            # Check if it contains class subfolders
+            subs = os.listdir(full)
+            if any(s in CLASSES for s in subs):
+                folders.append(full)
+    return folders
+
+TEST_FOLDERS = discover_test_folders(TESTING_DATA_ROOT)
