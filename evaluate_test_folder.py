@@ -2,6 +2,14 @@
 
 CRITICAL RULE: This is the ONLY legitimate use of test data.
 It should be run ONCE per model, after all training decisions are frozen.
+
+Multi-root support
+------------------
+The config exposes:
+    TEST_FOLDERS_BY_ROOT : {root_path -> [folder_path, ...]}
+    EVAL_OUTPUT_DIRS     : {root_path -> artifacts/eval/<tag>/}
+so every testing root (TestingData1, TestingData2, single image, class-folder,
+...) is evaluated independently and written to its own output directory.
 """
 import os, sys, json, argparse
 import numpy as np
@@ -12,7 +20,8 @@ from sklearn.metrics import (accuracy_score, precision_recall_fscore_support,
                               confusion_matrix, classification_report)
 
 from config import (CLASSES, NUM_CLASSES, DEVICE, ARTIFACTS,
-                    TESTING_DATA_ROOT, TEST_FOLDERS, BATCH_SIZE)
+                    TESTING_DATA_ROOT, TEST_FOLDERS, BATCH_SIZE,
+                    TEST_FOLDERS_BY_ROOT, EVAL_OUTPUT_DIRS)
 from data import IndexedImageDataset, eval_transform
 from audit import list_split
 from analysis import load_checkpoint
@@ -67,6 +76,7 @@ def evaluate_folder(model, folder_path, class_to_idx):
 
     return {
         "folder": os.path.basename(folder_path),
+        "folder_path": folder_path,
         "n_images": len(known_items),
         "n_unknown_classes": len(unknown_items),
         "accuracy": float(acc),
@@ -165,53 +175,24 @@ def plot_test_errors(model, folder_path, class_to_idx, save_path, n=12):
 
 
 # ============================================================
-# MAIN
+# Per-root evaluation
 # ============================================================
-def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--model", default="resnet_ft_v2",
-                        help="Checkpoint name in artifacts/")
-    parser.add_argument("--arch", default="resnet",
-                        choices=["cnn", "resnet"])
-    parser.add_argument("--folder", default=None,
-                        help="Specific test folder. If None, all folders.")
-    args = parser.parse_args()
+def evaluate_root(model, class_to_idx, root, folders, output_dir):
+    """
+    Evaluate every test folder that belongs to a single testing root.
 
-    print("=" * 70)
-    print("FINAL TEST EVALUATION")
-    print("=" * 70)
-    print(f"Model: {args.model} ({args.arch})")
-    print(f"Testing data root: {TESTING_DATA_ROOT}")
+    Returns
+    -------
+    list[dict] : light-weight result dicts (without raw arrays), one per folder.
+    """
+    print(f"\n{'#' * 70}")
+    print(f"# ROOT: {root}")
+    print(f"# Output dir: {output_dir}")
+    print(f"# Folders: {len(folders)}")
+    print(f"{'#' * 70}")
 
-    if not os.path.isdir(TESTING_DATA_ROOT):
-        print(f"✗ ERROR: {TESTING_DATA_ROOT} does not exist!")
-        print(f"  Please check your .env file or TestingData folder.")
-        sys.exit(1)
-
-    # Load model
-    model, ckpt = load_checkpoint(args.model, args.arch)
-    class_to_idx = {c: i for i, c in enumerate(CLASSES)}
-    print(f"✓ Loaded model from {args.model}.pt")
-
-    # Determine folders to evaluate
-    if args.folder:
-        folders = [args.folder]
-    else:
-        folders = TEST_FOLDERS
-        if not folders:
-            # Fallback: look for test0, test1, ... in TESTING_DATA_ROOT
-            folders = [os.path.join(TESTING_DATA_ROOT, n)
-                       for n in sorted(os.listdir(TESTING_DATA_ROOT))
-                       if os.path.isdir(os.path.join(TESTING_DATA_ROOT, n))]
-
-    print(f"\nFound {len(folders)} test folder(s):")
-    for f in folders:
-        print(f"  • {os.path.basename(f)}")
-
-    # Evaluate each folder
-    all_results = []
-    output_dir = os.path.join(ARTIFACTS, "test_evaluation")
     os.makedirs(output_dir, exist_ok=True)
+    root_results = []
 
     for folder in folders:
         print(f"\n{'=' * 70}")
@@ -250,44 +231,191 @@ def main():
         # Remove heavy fields before saving JSON
         result_light = {k: v for k, v in result.items()
                         if k not in ("y_true", "y_pred", "confidences", "probs")}
-        all_results.append(result_light)
+        root_results.append(result_light)
 
-        # Save per-folder JSON
+        # Save per-folder JSON inside the root's own output dir
         with open(os.path.join(output_dir,
                                f"{result['folder']}_report.json"), "w") as f:
             json.dump(result_light, f, indent=2)
 
-    # Aggregate summary
-    if all_results:
-        print(f"\n{'=' * 70}")
-        print("AGGREGATE SUMMARY")
-        print("=" * 70)
+    # Per-root summary
+    if root_results:
+        print(f"\n{'-' * 70}")
+        print(f"AGGREGATE SUMMARY — {os.path.basename(root)}")
+        print(f"{'-' * 70}")
 
         header = f"{'Folder':<12} {'N':>5} {'Acc':>7} {'MacroP':>8} {'MacroR':>8} {'MacroF1':>9}"
         print(header)
         print("-" * len(header))
-        for r in all_results:
+        for r in root_results:
             print(f"{r['folder']:<12} {r['n_images']:>5} "
                   f"{r['accuracy']:>7.4f} {r['macro_precision']:>8.4f} "
                   f"{r['macro_recall']:>8.4f} {r['macro_f1']:>9.4f}")
 
-        # Averages
-        avg_acc = np.mean([r["accuracy"] for r in all_results])
-        avg_f1 = np.mean([r["macro_f1"] for r in all_results])
+        avg_acc = float(np.mean([r["accuracy"] for r in root_results]))
+        avg_f1 = float(np.mean([r["macro_f1"] for r in root_results]))
         print("-" * len(header))
         print(f"{'AVERAGE':<12} {'':>5} {avg_acc:>7.4f} {'':>8} {'':>8} {avg_f1:>9.4f}")
 
         summary = {
-            "model": args.model,
-            "arch": args.arch,
-            "folders_evaluated": len(all_results),
-            "average_accuracy": float(avg_acc),
-            "average_macro_f1": float(avg_f1),
-            "per_folder": all_results,
+            "root": root,
+            "root_tag": os.path.basename(os.path.normpath(root)),
+            "folders_evaluated": len(root_results),
+            "average_accuracy": avg_acc,
+            "average_macro_f1": avg_f1,
+            "per_folder": root_results,
         }
         with open(os.path.join(output_dir, "summary.json"), "w") as f:
             json.dump(summary, f, indent=2)
-        print(f"\n✓ Summary saved to {output_dir}/summary.json")
+        print(f"\n✓ Root summary saved to {output_dir}/summary.json")
+
+    return root_results
+
+
+# ============================================================
+# MAIN
+# ============================================================
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--model", default="resnet_ft_v2",
+                        help="Checkpoint name in artifacts/")
+    parser.add_argument("--arch", default="resnet",
+                        choices=["cnn", "resnet"])
+    parser.add_argument("--folder", default=None,
+                        help="Specific test folder. If set, evaluate only it.")
+    parser.add_argument("--root", default=None,
+                        help="Restrict evaluation to one testing root.")
+    args = parser.parse_args()
+
+    print("=" * 70)
+    print("FINAL TEST EVALUATION")
+    print("=" * 70)
+    print(f"Model: {args.model} ({args.arch})")
+
+    # Load model once — shared across every testing root
+    model, ckpt = load_checkpoint(args.model, args.arch)
+    class_to_idx = {c: i for i, c in enumerate(CLASSES)}
+    print(f"✓ Loaded model from {args.model}.pt")
+
+    # -------- Single-folder mode (debug / targeted evaluation) --------
+    if args.folder:
+        # Determine which root this folder belongs to (for output dir)
+        folder_abs = os.path.abspath(args.folder)
+        owner_root = None
+        for root in TEST_FOLDERS_BY_ROOT:
+            if folder_abs.startswith(os.path.abspath(root)):
+                owner_root = root
+                break
+        if owner_root is None:
+            owner_root = TESTING_DATA_ROOT  # fall back to default root tag
+
+        # Prefer pre-computed dir, else build one from config helper
+        output_dir = EVAL_OUTPUT_DIRS.get(owner_root)
+        if output_dir is None:
+            try:
+                from config import build_output_dir
+                output_dir = build_output_dir(owner_root)
+            except Exception:
+                output_dir = os.path.join(ARTIFACTS, "eval",
+                                          os.path.basename(os.path.normpath(owner_root)))
+                os.makedirs(output_dir, exist_ok=True)
+
+        evaluate_root(model, class_to_idx, owner_root,
+                      [folder_abs], output_dir)
+        return
+
+    # -------- Multi-root mode (default) --------
+    # Build the {root -> folders} mapping. If the new config is empty
+    # (e.g. an older config.py), fall back to the legacy single-root form.
+    if TEST_FOLDERS_BY_ROOT:
+        roots_to_eval = TEST_FOLDERS_BY_ROOT
+    else:
+        # Legacy fallback: only TESTING_DATA_ROOT / TEST_FOLDERS available
+        roots_to_eval = {TESTING_DATA_ROOT: TEST_FOLDERS}
+
+    # Optional restriction via --root
+    if args.root:
+        wanted = os.path.abspath(args.root)
+        roots_to_eval = {
+            r: f for r, f in roots_to_eval.items()
+            if os.path.abspath(r) == wanted
+        }
+        if not roots_to_eval:
+            print(f"✗ ERROR: --root {args.root} not found in TEST_FOLDERS_BY_ROOT")
+            sys.exit(1)
+
+    # Show the plan
+    print(f"\nTesting roots to evaluate: {len(roots_to_eval)}")
+    for root, folders in roots_to_eval.items():
+        tag = os.path.basename(os.path.normpath(root))
+        print(f"  • {tag:<20} ({len(folders)} folder(s))  <- {root}")
+
+    # Evaluate each root into its own output directory
+    all_roots_summary = {}
+    for root, folders in roots_to_eval.items():
+        # Resolve output dir: prefer pre-computed, else build on the fly
+        output_dir = EVAL_OUTPUT_DIRS.get(root)
+        if output_dir is None:
+            try:
+                from config import build_output_dir
+                output_dir = build_output_dir(root)
+            except Exception:
+                output_dir = os.path.join(ARTIFACTS, "eval",
+                                          os.path.basename(os.path.normpath(root)))
+                os.makedirs(output_dir, exist_ok=True)
+
+        if not folders:
+            # Fallback: look for subfolders containing known classes
+            if os.path.isdir(root):
+                folders = [
+                    os.path.join(root, n)
+                    for n in sorted(os.listdir(root))
+                    if os.path.isdir(os.path.join(root, n))
+                ]
+            if not folders:
+                print(f"\n⚠ Skipping root {root} (no folders found)")
+                continue
+
+        root_results = evaluate_root(
+            model, class_to_idx, root, folders, output_dir
+        )
+        if root_results:
+            all_roots_summary[root] = {
+                "tag": os.path.basename(os.path.normpath(root)),
+                "output_dir": output_dir,
+                "folders_evaluated": len(root_results),
+                "average_accuracy": float(np.mean(
+                    [r["accuracy"] for r in root_results])),
+                "average_macro_f1": float(np.mean(
+                    [r["macro_f1"] for r in root_results])),
+            }
+
+    # -------- Cross-root comparison summary --------
+    if len(all_roots_summary) > 1:
+        compare_dir = os.path.join(ARTIFACTS, "eval")
+        os.makedirs(compare_dir, exist_ok=True)
+        compare_path = os.path.join(compare_dir, "summary_all_roots.json")
+
+        print(f"\n{'=' * 70}")
+        print("CROSS-ROOT COMPARISON")
+        print("=" * 70)
+        header = f"{'Root':<22} {'#Folders':>9} {'AvgAcc':>9} {'AvgF1':>9}"
+        print(header)
+        print("-" * len(header))
+        for root, s in all_roots_summary.items():
+            print(f"{s['tag']:<22} {s['folders_evaluated']:>9} "
+                  f"{s['average_accuracy']:>9.4f} {s['average_macro_f1']:>9.4f}")
+
+        with open(compare_path, "w") as f:
+            json.dump(
+                {
+                    "model": args.model,
+                    "arch": args.arch,
+                    "roots": all_roots_summary,
+                },
+                f, indent=2
+            )
+        print(f"\n✓ Cross-root summary saved to {compare_path}")
 
     print(f"\n{'=' * 70}")
     print("✓ FINAL TEST EVALUATION COMPLETE")
