@@ -1,27 +1,6 @@
 """
 Central configuration: single source of truth for reproducibility.
-
-All input paths are resolved from environment variables (see .env) so the
-same code base can be executed against different dataset / testing-data
-combinations without editing any source file.
-
-Path resolution
----------------
-Relative paths in .env (e.g. "../dataset", "../TestingData1") are resolved
-against BASE_DIR — the folder that contains this config.py, i.e. the
-`traffic-vehicle-classification` code folder. This makes
-    ../dataset  ->  <...>/HW12-0-Project-Vehicle/dataset
-    ../TestingData1 ->  <...>/HW12-0-Project-Vehicle/TestingData1
-which matches the on-disk layout used in this repository.
-
-Supported scenarios
--------------------
-1. Baseline run            : USE_DATASET_V2=false, TESTING_DATA_ROOTS=../TestingData1
-2. Augmented run           : USE_DATASET_V2=true,  TESTING_DATA_ROOTS=../TestingData1,../TestingData2
-3. Single-image test       : TEST_IMAGE_PATH=../samples/my_car.jpg
-4. Single class-folder test: TEST_CLASS_FOLDER=../TestingData3
-5. Cross-test comparison   : keep the trained model fixed and only flip
-                             TESTING_DATA_ROOTS between TestingData1 / TestingData2.
+...
 """
 import os
 import shutil
@@ -41,16 +20,7 @@ PROJECT_ROOT = os.path.dirname(BASE_DIR)      # HW12-0-Project-Vehicle folder
 
 
 def _resolve(path: str, default_rel: str) -> str:
-    """
-    Resolve `path` (absolute, or relative to BASE_DIR — the code folder
-    that contains this config.py).
-
-    Examples (with BASE_DIR = .../HW12-0-Project-Vehicle/traffic-vehicle-classification)
-    ---------------------------------------------------------------------------------
-    "../dataset"            -> .../HW12-0-Project-Vehicle/dataset
-    "../TestingData1"       -> .../HW12-0-Project-Vehicle/TestingData1
-    "E:/abs/path/data"      -> E:/abs/path/data   (unchanged)
-    """
+    """Resolve `path` (absolute, or relative to BASE_DIR)."""
     if not path:
         path = default_rel
     if os.path.isabs(path):
@@ -79,23 +49,35 @@ USE_DATASET_V2 = _env_bool("USE_DATASET_V2", False)
 # ===========================================================================
 def _link_or_copy(src: str, dst: str) -> None:
     """Create dst -> src using symlink > hardlink > copy (cross-platform)."""
-    if os.path.exists(dst) or os.path.islink(dst):
+    # 1. Handle broken symlinks or existing files safely
+    if os.path.islink(dst):
+        if not os.path.exists(dst):
+            try:
+                os.unlink(dst)  # Clean up broken symlink
+            except OSError:
+                pass
+        else:
+            return  # File already exists and is valid
+    elif os.path.exists(dst):
         return
+
+    # 2. Try to link or copy
     try:
         os.symlink(src, dst)                 # Linux / macOS
     except (OSError, NotImplementedError):
         try:
             os.link(src, dst)                # Windows NTFS same-volume
         except OSError:
-            shutil.copy2(src, dst)           # last resort
+            try:
+                shutil.copy2(src, dst)       # last resort
+            except (shutil.SameFileError, FileExistsError, OSError):
+                # Ignore if the file is already there or is the same file
+                pass
 
 
 def _merge_split(sources: List[Tuple[str, str]], out_split: str) -> None:
     """
     Merge multiple class-organised split folders into `out_split`.
-
-    sources : list of (src_root, filename_prefix)
-              e.g. [(DATA_ROOT_V1/train, ""), (DATA_ROOT_V2/train, "v2_")]
     """
     os.makedirs(out_split, exist_ok=True)
     for src_root, tag in sources:
@@ -118,13 +100,28 @@ def _merge_split(sources: List[Tuple[str, str]], out_split: str) -> None:
 def _build_merged_root() -> str:
     """
     Physically merge V1 + V2 (train & unclean) into `dataset_merged/`
-    next to the code folder. The test split is taken from V1 only because
-    V2 does not ship one. The folder is rebuilt on every interpreter start
-    so additions / deletions in the source folders are always reflected.
+    next to the code folder.
     """
     merged = os.path.join(PROJECT_ROOT, "dataset_merged")
-    if os.path.isdir(merged):
-        shutil.rmtree(merged)
+    
+    # --- بخش اصلاح شده: پاک‌سازی ایمن پوشه قبلی ---
+    if os.path.islink(merged):
+        try:
+            os.unlink(merged)
+        except OSError:
+            try:
+                os.rmdir(merged)
+            except OSError:
+                pass
+    elif os.path.isdir(merged):
+        shutil.rmtree(merged, ignore_errors=True)
+
+    # جلوگیری از ادغام پوشه درون خودش
+    v1_abs = os.path.abspath(DATA_ROOT_V1) if DATA_ROOT_V1 else ""
+    v2_abs = os.path.abspath(DATA_ROOT_V2) if DATA_ROOT_V2 else ""
+    if v1_abs == os.path.abspath(merged) or v2_abs == os.path.abspath(merged):
+        return merged
+
     os.makedirs(merged, exist_ok=True)
 
     _merge_split(
@@ -177,7 +174,6 @@ NUM_WORKERS = 2
 CONFIDENCE_THRESHOLD = 0.70
 PIN_MEMORY = True
 
-# ImageNet statistics — required whenever we use pretrained ResNet18
 IMAGENET_MEAN = (0.485, 0.456, 0.406)
 IMAGENET_STD  = (0.229, 0.224, 0.225)
 
@@ -195,28 +191,23 @@ def _split_env_paths(raw: str) -> List[str]:
     return [p.strip() for p in raw.split(",") if p.strip()]
 
 
-# (A) Folder-style roots (test0/, test1/, ... inside each).
 _raw_roots = os.getenv("TESTING_DATA_ROOTS", "").strip()
 if _raw_roots:
     TESTING_DATA_ROOTS: List[str] = [
         _resolve(p, p) for p in _split_env_paths(_raw_roots)
     ]
 else:
-    # Legacy fallback: single TESTING_DATA_ROOT
     _legacy = os.getenv("TESTING_DATA_ROOT", "").strip()
     TESTING_DATA_ROOTS = [_resolve(_legacy, "TestingData1")]
 
-# Convenience alias (first root) — keeps old scripts working unchanged
 TESTING_DATA_ROOT = TESTING_DATA_ROOTS[0]
 TESTING_DATA_TAG  = os.path.basename(os.path.normpath(TESTING_DATA_ROOT))
 
 
-# (B) Single-image test (one-sample test set)
 _raw_img = os.getenv("TEST_IMAGE_PATH", "").strip()
 TEST_IMAGE_PATH = _resolve(_raw_img, _raw_img) if _raw_img else None
 
 
-# (C) Single class-organised folder (ambulance/, taxi/, ...)
 _raw_cls = os.getenv("TEST_CLASS_FOLDER", "").strip()
 TEST_CLASS_FOLDER = _resolve(_raw_cls, _raw_cls) if _raw_cls else None
 
@@ -235,12 +226,10 @@ def discover_test_folders(root: str) -> List[str]:
     return folders
 
 
-# Mapping root -> folders, in case you want to iterate over every testing set
 TEST_FOLDERS_BY_ROOT: Dict[str, List[str]] = {
     r: discover_test_folders(r) for r in TESTING_DATA_ROOTS
 }
 
-# Flattened list — the evaluation script can iterate over it directly
 TEST_FOLDERS: List[str] = [
     f for folders in TEST_FOLDERS_BY_ROOT.values() for f in folders
 ]
@@ -250,35 +239,19 @@ TEST_FOLDERS: List[str] = [
 # Independent output layout — one sub-folder per testing target
 # ===========================================================================
 def target_tag(path: str | None) -> str:
-    """
-    Stable, filesystem-safe tag for a testing target.
-
-    Examples
-    --------
-    ../TestingData1           -> "TestingData1"
-    ../TestingData2           -> "TestingData2"
-    ../samples/my_car.jpg     -> "my_car"
-    ../TestingData3           -> "TestingData3"
-    """
+    """Stable, filesystem-safe tag for a testing target."""
     if not path:
         return "unknown"
     return os.path.splitext(os.path.basename(os.path.normpath(path)))[0]
 
 
 def build_output_dir(target_path: str) -> str:
-    """
-    Each testing target gets its own output directory:
-        artifacts/eval/<tag>/ ...
-
-    This guarantees TestingData1 / TestingData2 / single image / class-folder
-    results never overwrite each other and can be compared side by side.
-    """
+    """Each testing target gets its own output directory."""
     out_dir = os.path.join(ARTIFACTS, "eval", target_tag(target_path))
     os.makedirs(out_dir, exist_ok=True)
     return out_dir
 
 
-# Pre-computed output directories, keyed by the original target path.
 EVAL_OUTPUT_DIRS: Dict[str, str] = {}
 for _r in TESTING_DATA_ROOTS:
     EVAL_OUTPUT_DIRS[_r] = build_output_dir(_r)
