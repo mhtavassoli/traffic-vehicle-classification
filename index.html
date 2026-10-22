@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MIMO-TDA Vehicle Classifier</title>
+    <style>
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #f4f7f6; color: #333; max-width: 800px; margin: 0 auto; padding: 20px; }
+        .header { text-align: center; margin-bottom: 30px; }
+        .upload-box { background: white; padding: 30px; border-radius: 10px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); text-align: center; }
+        .upload-box input[type="file"] { display: none; }
+        .upload-btn { background: #4CAF50; color: white; padding: 12px 24px; border: none; border-radius: 5px; cursor: pointer; font-size: 16px; }
+        .upload-btn:hover { background: #45a049; }
+        .result-box { display: none; background: white; padding: 20px; border-radius: 10px; margin-top: 20px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
+        .warning-box { background: #ffebee; border-left: 5px solid #f44336; padding: 15px; margin-top: 15px; display: none; }
+        .success-box { background: #e8f5e9; border-left: 5px solid #4CAF50; padding: 15px; margin-top: 15px; display: none; }
+        .prob-bar { height: 20px; background: #e0e0e0; border-radius: 10px; margin-bottom: 10px; overflow: hidden; }
+        .prob-fill { height: 100%; background: #2196F3; transition: width 0.5s ease-in-out; }
+        .prob-label { display: flex; justify-content: space-between; font-size: 14px; margin-bottom: 5px; }
+        .expert-weights { margin-top: 15px; font-size: 14px; color: #666; display: flex; justify-content: space-around; }
+        #preview { max-width: 100%; max-height: 300px; border-radius: 5px; margin-top: 15px; display: none; }
+        .feedback-btn { background: #ff9800; color: white; padding: 8px 16px; border: none; border-radius: 5px; cursor: pointer; margin-top: 10px; }
+    </style>
+</head>
+<body>
+
+    <div class="header">
+        <h1>🚗 MIMO-TDA Vehicle Classifier</h1>
+        <p>Phase 14: Topology + Attention + Human-in-the-Loop</p>
+    </div>
+
+    <div class="upload-box">
+        <input type="file" id="imageInput" accept="image/*" onchange="previewImage(event)">
+        <label for="imageInput" class="upload-btn">Choose Image</label>
+        <img id="preview" src="" alt="Preview">
+    </div>
+
+    <div id="resultBox" class="result-box">
+        <h2>Prediction: <span id="predClass" style="color:#2196F3;"></span></h2>
+        <p>Confidence: <strong id="confidence"></strong> | Margin: <strong id="margin"></strong></p>
+        
+        <div class="expert-weights">
+            <span>👁 Attention Expert: <strong id="wAttn"></strong></span>
+            <span>📐 Topology Expert: <strong id="wTopo"></strong></span>
+        </div>
+
+        <div id="probContainer" style="margin-top: 20px;"></div>
+
+        <div id="warningBox" class="warning-box">
+            <strong>⚠️ NEEDS HUMAN REVIEW!</strong><br>
+            The margin is too low. The model is uncertain. Please select the correct label:
+            <div id="feedbackButtons" style="margin-top: 10px; display: flex; gap: 10px; flex-wrap: wrap;"></div>
+        </div>
+        
+        <div id="successBox" class="success-box">
+            <strong>✅ CONFIDENT PREDICTION</strong><br>
+            The model is highly certain. No review needed.
+        </div>
+    </div>
+
+    <script>
+        const CLASSES = ["ambulance", "autobus", "kamyun", "kamyunet", "minibus", "savari", "taxi", "vanet"];
+
+        function previewImage(event) {
+            const reader = new FileReader();
+            reader.onload = function() {
+                const output = document.getElementById('preview');
+                output.src = reader.result;
+                output.style.display = 'block';
+                uploadImage(event.target.files[0]);
+            };
+            reader.readAsDataURL(event.target.files[0]);
+        }
+
+        async function uploadImage(file) {
+            const formData = new FormData();
+            formData.append("file", file);
+
+            document.getElementById('resultBox').style.display = 'none';
+
+            const response = await fetch("/predict", { method: "POST", body: formData });
+            const data = await response.json();
+
+            if (data.error) {
+                alert("Error: " + data.error);
+                return;
+            }
+
+            // Fill data
+            document.getElementById('predClass').innerText = data.predicted_class;
+            document.getElementById('confidence').innerText = (data.confidence * 100).toFixed(2) + "%";
+            document.getElementById('margin').innerText = (data.margin * 100).toFixed(2) + "%";
+            document.getElementById('wAttn').innerText = data.expert_weights.attention;
+            document.getElementById('wTopo').innerText = data.expert_weights.topology;
+
+            // Draw probability bars
+            const container = document.getElementById('probContainer');
+            container.innerHTML = "";
+            CLASSES.forEach(cls => {
+                const prob = data.probabilities[cls] || 0;
+                const pct = (prob * 100).toFixed(1);
+                container.innerHTML += `
+                    <div class="prob-label"><span>${cls}</span><span>${pct}%</span></div>
+                    <div class="prob-bar"><div class="prob-fill" style="width: ${pct}%"></div></div>
+                `;
+            });
+
+            // Handle Reject Option
+            const warningBox = document.getElementById('warningBox');
+            const successBox = document.getElementById('successBox');
+            const feedbackBtns = document.getElementById('feedbackButtons');
+
+            if (data.needs_review) {
+                warningBox.style.display = 'block';
+                successBox.style.display = 'none';
+                
+                // Generate buttons for human feedback
+                feedbackBtns.innerHTML = "";
+                CLASSES.forEach(cls => {
+                    feedbackBtns.innerHTML += `<button class="feedback-btn" onclick="sendFeedback('${file.name}', '${cls}')">${cls}</button>`;
+                });
+            } else {
+                warningBox.style.display = 'none';
+                successBox.style.display = 'block';
+            }
+
+            document.getElementById('resultBox').style.display = 'block';
+        }
+
+        async function sendFeedback(filename, label) {
+            const formData = new FormData();
+            formData.append("filename", filename);
+            formData.append("corrected_label", label);
+
+            const response = await fetch("/feedback", { method: "POST", body: formData });
+            const data = await response.json();
+            
+            alert(data.message);
+            document.getElementById('warningBox').style.display = 'none';
+        }
+    </script>
+</body>
+</html>
