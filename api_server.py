@@ -1,4 +1,4 @@
-"""api_server.py — FastAPI Backend for Phase 14 Model.
+"""api_server.py — FastAPI Backend for Phase 16 Model.
 Serves the UI and handles inference + human feedback.
 """
 import os
@@ -8,24 +8,27 @@ import torch
 import torch.nn.functional as F
 from fastapi import FastAPI, UploadFile, File, Form
 from fastapi.responses import HTMLResponse, JSONResponse
-from fastapi.staticfiles import StaticFiles
 from PIL import Image
 from torchvision import transforms
 from config import CLASSES, NUM_CLASSES, DEVICE, ARTIFACTS, IMAGENET_MEAN, IMAGENET_STD, IMG_SIZE
-from models_phase14 import Phase14Net
+from models_phase16 import Phase16Net
 
 app = FastAPI(title="Traffic Vehicle Classifier (MIMO-TDA)")
 
 # 1) Load Model Globally
-print("Loading Phase 14 Model...")
-model = Phase14Net(num_classes=NUM_CLASSES).to(DEVICE)
-ckpt_path = os.path.join(ARTIFACTS, "phase14.pt")
+print("Loading Phase 16 Model...")
+model = Phase16Net(num_classes=NUM_CLASSES).to(DEVICE)
+ckpt_path = os.path.join(ARTIFACTS, "phase16.pt")
+
 if os.path.exists(ckpt_path):
     ckpt = torch.load(ckpt_path, map_location=DEVICE, weights_only=False)
-    model.load_state_dict(ckpt["state_dict"])
-    print("✓ Model Loaded Successfully.")
+    state_dict = ckpt["state_dict"] if isinstance(ckpt, dict) and "state_dict" in ckpt else ckpt
+    model_dict = model.state_dict()
+    filtered_dict = {k: v for k, v in state_dict.items() if k in model_dict and v.shape == model_dict[k].shape}
+    model.load_state_dict(filtered_dict, strict=False)
+    print(f"✓ Model Loaded Successfully from {os.path.basename(ckpt_path)}.")
 else:
-    print("⚠ Warning: phase14.pt not found. Using random weights.")
+    print("⚠ Warning: phase16.pt not found. Using random weights.")
 model.eval()
 
 # 2) Define Transform
@@ -51,8 +54,10 @@ async def predict(file: UploadFile = File(...)):
         # Inference
         with torch.no_grad():
             out = model(x, return_all=True)
-            memberships = out["memberships"]
-            probs = torch.softmax(memberships, dim=1)[0]
+            
+            # FIX: The QuantumHead already outputs a valid probability distribution.
+            # We should NOT apply softmax again. We just take the first batch item.
+            probs = out["memberships"][0]
             
             # Get Top-2
             top2_probs, top2_idx = torch.topk(probs, 2)
