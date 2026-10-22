@@ -21,7 +21,7 @@ from models_phase13 import Phase13Net, Phase13Loss
 def train_epoch(model, loader, optimizer, criterion, device):
     model.train()
     total_loss, correct, total = 0.0, 0, 0
-    cls_sum, sh_sum, ent_sum = 0.0, 0.0, 0.0
+    cls_sum, sh_sum, ent_sum, bal_sum = 0.0, 0.0, 0.0, 0.0
     attn_w_sum, topo_w_sum = 0.0, 0.0
 
     for x, y in loader:
@@ -30,13 +30,14 @@ def train_epoch(model, loader, optimizer, criterion, device):
 
         out = model(x, return_all=True)
 
-        # Phase13Loss returns a 4-tuple from Loss
-        loss, cls_l, sh_l, ent = criterion(
-            out["memberships"],
-            out["attention"],
-            out["expert_weights"],
-            y,
+        # Get 5 new outputs
+        loss, cls_l, sh_l, ent, bal = criterion(
+            out["memberships"], 
+            out["attention"], 
+            out["expert_weights"], 
+            y
         )
+
 
         loss.backward()
         torch.nn.utils.clip_grad_norm_(model.parameters(), 5.0)
@@ -48,9 +49,10 @@ def train_epoch(model, loader, optimizer, criterion, device):
         total += bs
 
         total_loss += loss.item() * bs
-        cls_sum    += cls_l      * bs
-        sh_sum     += sh_l       * bs
-        ent_sum    += ent        * bs
+        cls_sum    += cls_l       * bs
+        sh_sum     += sh_l        * bs
+        ent_sum    += ent         * bs
+        bal_sum    += bal         * bs
         
         attn_w_sum += out["expert_weights"][:, 0].sum().item()
         topo_w_sum += out["expert_weights"][:, 1].sum().item()
@@ -63,6 +65,7 @@ def train_epoch(model, loader, optimizer, criterion, device):
         "cls_loss": cls_sum / total,
         "sh_loss":  sh_sum / total,
         "entropy":  ent_sum / total,
+        "balance":  bal_sum / total
     }
 
 
@@ -122,7 +125,7 @@ def main():
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
         optimizer, T_max=EPOCHS, eta_min=1e-5,
     )
-    criterion = Phase13Loss(beta_shortcut=0.1, gamma_entropy=0.5)
+    criterion = Phase13Loss(beta_shortcut=0.1, gamma_entropy=0.1, delta_balance=0.5)
 
     best_acc = 0.0
     history = []
@@ -135,9 +138,7 @@ def main():
         scheduler.step()
 
         print(
-            f"ep {epoch:02d} | loss {tr['loss']:.4f} "
-            f"(cls {tr['cls_loss']:.3f}, sh {tr['sh_loss']:.3f}, "
-            f"ent {tr['entropy']:.3f}) | "
+            f"ep {epoch:02d} | loss {tr['loss']:.4f} (cls {tr['cls_loss']:.3f}, sh {tr['sh_loss']:.3f}, ent {tr['entropy']:.3f}) | "
             f"tr {tr['acc']:.4f} | va {va_acc:.4f} | "
             f"W: Attn={tr['attn_w']:.2f} Topo={tr['topo_w']:.2f}"
         )
