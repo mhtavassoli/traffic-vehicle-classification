@@ -18,7 +18,7 @@ app = FastAPI(title="Traffic Vehicle Classifier (MIMO-TDA)")
 # 1) Load Model Globally
 print("Loading Phase 16 Model...")
 model = Phase16Net(num_classes=NUM_CLASSES).to(DEVICE)
-ckpt_path = os.path.join(ARTIFACTS, "phase16.pt")
+ckpt_path = os.path.join(ARTIFACTS, "phase17.pt")
 
 if os.path.exists(ckpt_path):
     ckpt = torch.load(ckpt_path, map_location=DEVICE, weights_only=False)
