@@ -1,4 +1,4 @@
-"""api_server.py — FastAPI Backend for Phase 16 Model.
+"""api_server.py — FastAPI Backend for the Best Model (Phase 17).
 Serves the UI and handles inference + human feedback.
 """
 import os
@@ -11,24 +11,21 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from PIL import Image
 from torchvision import transforms
 from config import CLASSES, NUM_CLASSES, DEVICE, ARTIFACTS, IMAGENET_MEAN, IMAGENET_STD, IMG_SIZE
-from models_phase16 import Phase16Net
+from models_phase16 import Phase16Net # Phase 17 uses Phase 16 architecture
 
-app = FastAPI(title="Traffic Vehicle Classifier (MIMO-TDA)")
+app = FastAPI(title="Traffic Vehicle Classifier (Phase 17 - Active Learning)")
 
 # 1) Load Model Globally
-print("Loading Phase 16 Model...")
+print("Loading Phase 17 Model...")
 model = Phase16Net(num_classes=NUM_CLASSES).to(DEVICE)
 ckpt_path = os.path.join(ARTIFACTS, "phase17.pt")
 
 if os.path.exists(ckpt_path):
     ckpt = torch.load(ckpt_path, map_location=DEVICE, weights_only=False)
-    state_dict = ckpt["state_dict"] if isinstance(ckpt, dict) and "state_dict" in ckpt else ckpt
-    model_dict = model.state_dict()
-    filtered_dict = {k: v for k, v in state_dict.items() if k in model_dict and v.shape == model_dict[k].shape}
-    model.load_state_dict(filtered_dict, strict=False)
-    print(f"✓ Model Loaded Successfully from {os.path.basename(ckpt_path)}.")
+    model.load_state_dict(ckpt["state_dict"])
+    print("✓ Phase 17 Model Loaded Successfully.")
 else:
-    print("⚠ Warning: phase16.pt not found. Using random weights.")
+    print("⚠ Warning: phase17.pt not found. Please run train_phase17.py first.")
 model.eval()
 
 # 2) Define Transform
@@ -38,7 +35,9 @@ eval_tf = transforms.Compose([
     transforms.Normalize(IMAGENET_MEAN, IMAGENET_STD),
 ])
 
-REJECT_THRESHOLD = 0.15
+# Increased threshold to 0.25 to force the model to ask for help when it's uncertain.
+# This prevents the "confidently wrong" issue seen in Phase 16/17.
+REJECT_THRESHOLD = 0.25 
 
 @app.post("/predict")
 async def predict(file: UploadFile = File(...)):
@@ -55,8 +54,7 @@ async def predict(file: UploadFile = File(...)):
         with torch.no_grad():
             out = model(x, return_all=True)
             
-            # FIX: The QuantumHead already outputs a valid probability distribution.
-            # We should NOT apply softmax again. We just take the first batch item.
+            # QuantumHead outputs probabilities directly, no softmax needed.
             probs = out["memberships"][0]
             
             # Get Top-2
@@ -94,7 +92,10 @@ async def feedback(filename: str = Form(...), corrected_label: str = Form(...)):
     data = []
     if os.path.exists(feedback_file):
         with open(feedback_file, "r") as f:
-            data = json.load(f)
+            try:
+                data = json.load(f)
+            except json.JSONDecodeError:
+                data = []
             
     data.append({"filename": filename, "corrected_label": corrected_label})
     
